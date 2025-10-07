@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ImgBB Bulk Upload + Link History (localStorage)</title>
+  <!-- Font Awesome (optional) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" integrity="sha512-..." crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;margin:0;background:#f6f7fb;color:#0b1220;padding:20px}
+    .card{background:#fff;border-radius:10px;box-shadow:0 6px 18px rgba(10,10,20,0.06);padding:18px;max-width:920px;margin:12px auto}
+    h1{font-size:20px;margin:0 0 10px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    input[type=file]{display:block}
+    button{background:#136f63;color:#fff;border:0;padding:10px 14px;border-radius:8px;cursor:pointer}
+    button.ghost{background:transparent;color:#136f63;border:1px solid #136f63}
+    .progress{height:8px;background:#e6eef6;border-radius:999px;overflow:hidden;margin-top:8px}
+    .bar{height:100%;width:0%;background:linear-gradient(90deg,#12a37f,#3ad2b3)}
+    ul{list-style:none;padding:0;margin:0}
+    li.item{padding:10px;border-bottom:1px dashed #eee;display:flex;justify-content:space-between;gap:12px;align-items:center}
+    .meta{font-size:13px;color:#546070}
+    .linkbox{display:flex;gap:8px;align-items:center}
+    .chip{background:#eef7f4;padding:6px 8px;border-radius:8px;font-size:13px;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .small{font-size:12px;color:#788292}
+    .history-empty{color:#9aa3b2;padding:12px;text-align:center}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    @media(max-width:640px){.row{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1><i class="fa-solid fa-cloud-arrow-up"></i> ImgBB Bulk Upload — লিংক আউটপুট + হিস্ট্রি</h1>
+    <p class="small">নির্দেশনা: নিচে একাধিক ইমেজ সিলেক্ট করে "Upload" বাটনে চাপলে প্রতিটি ছবি আপলোড হবে, আপলোড শেষে লিংক দেখাবে এবং localStorage-এ সংরক্ষণ করবে।</p>
+
+    <div style="margin-top:12px" class="row">
+      <div style="flex:1 1 320px">
+        <label class="meta">চিত্র সিলেক্ট করুন (multiple allowed)</label>
+        <input id="files" type="file" accept="image/*" multiple />
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
+        <button id="uploadBtn"><i class="fa-solid fa-cloud-arrow-up"></i> Upload</button>
+        <button id="clearHistory" class="ghost"><i class="fa-regular fa-trash-can"></i> Clear History</button>
+      </div>
+    </div>
+
+    <div id="overallProgress" style="margin-top:14px;display:none">
+      <div class="meta">Overall progress</div>
+      <div class="progress"><div id="overallBar" class="bar"></div></div>
+    </div>
+
+    <hr style="margin:16px 0" />
+
+    <div class="row">
+      <div style="flex:1 1 50%">
+        <h2 style="font-size:16px;margin-bottom:8px">Upload Results</h2>
+        <ul id="resultsList"></ul>
+      </div>
+
+      <div style="flex:1 1 40%">
+        <h2 style="font-size:16px;margin-bottom:8px">Saved Link History (localStorage)</h2>
+        <div id="historyListContainer">
+          <ul id="historyList"></ul>
+          <div id="historyEmpty" class="history-empty" style="display:none">কোনো হিস্ট্রি নেই</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px" class="small">
+      <strong>API Key used:</strong> <code id="apiKeyDisplay"></code>
+    </div>
+  </div>
+
+  <script>
+    // ====== CONFIG ======
+    // আপনি এখানে আপনার দেয়া API key সেট করেছেন:
+    const IMGBB_API_KEY = "5e7311818264c98ebf4a79dbb58b55aa";
+    const LOCAL_STORAGE_KEY = "imgbb_link_history_v1";
+
+    // UI references
+    const filesInput = document.getElementById("files");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const resultsList = document.getElementById("resultsList");
+    const historyList = document.getElementById("historyList");
+    const historyEmpty = document.getElementById("historyEmpty");
+    const clearHistoryBtn = document.getElementById("clearHistory");
+    const apiKeyDisplay = document.getElementById("apiKeyDisplay");
+    const overallProgress = document.getElementById("overallProgress");
+    const overallBar = document.getElementById("overallBar");
+
+    apiKeyDisplay.textContent = IMGBB_API_KEY;
+
+    // লোড করা হিস্ট্রি দেখান
+    function loadHistory() {
+      const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+      let arr = [];
+      try { arr = raw ? JSON.parse(raw) : []; } catch(e){ arr = []; }
+      renderHistory(arr);
+      return arr;
+    }
+
+    function saveToHistory(newEntry) {
+      const arr = loadHistory();
+      arr.unshift(newEntry); // নতুনকে উপরে রাখি
+      // Optional: সীমা রাখি (e.g., সর্বোচ্চ 200)
+      const MAX = 200;
+      if (arr.length > MAX) arr.length = MAX;
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(arr));
+      renderHistory(arr);
+    }
+
+    function clearHistory() {
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      renderHistory([]);
+    }
+
+    function renderHistory(arr) {
+      historyList.innerHTML = "";
+      if (!arr || arr.length === 0) {
+        historyEmpty.style.display = "block";
+        return;
+      }
+      historyEmpty.style.display = "none";
+      arr.forEach(item => {
+        const li = document.createElement("li");
+        li.className = "item";
+        li.innerHTML = `
+          <div>
+            <div class="chip" title="${item.link}">${item.link}</div>
+            <div class="meta">${new Date(item.at).toLocaleString()}</div>
+          </div>
+          <div class="linkbox">
+            <button class="ghost open" data-url="${item.link}" title="Open"><i class="fa-solid fa-up-right-from-square"></i></button>
+            <button class="ghost copy" data-url="${item.link}" title="Copy"><i class="fa-regular fa-copy"></i></button>
+          </div>
+        `;
+        historyList.appendChild(li);
+      });
+
+      // attach listeners
+      historyList.querySelectorAll(".open").forEach(btn=>{
+        btn.addEventListener("click",()=>window.open(btn.dataset.url,"_blank"));
+      });
+      historyList.querySelectorAll(".copy").forEach(btn=>{
+        btn.addEventListener("click",async ()=>{
+          try {
+            await navigator.clipboard.writeText(btn.dataset.url);
+            btn.textContent = "Copied";
+            setTimeout(()=>btn.innerHTML = '<i class="fa-regular fa-copy"></i>',900);
+          } catch(e){
+            alert("Copy failed: " + e);
+          }
+        });
+      });
+    }
+
+    // প্রাইভেট হেলপার: ফাইলকে base64 এ রূপান্তর করা
+    function fileToBase64(file) {
+      return new Promise((resolve,reject)=>{
+        const reader = new FileReader();
+        reader.onload = ()=> {
+          // DataURL আকারে আসে: data:image/png;base64,AAAA...
+          const dataUrl = reader.result;
+          const idx = dataUrl.indexOf("base64,");
+          const base64 = idx >= 0 ? dataUrl.slice(idx + 7) : dataUrl;
+          resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // একটি ছবি আপলোড করুন (imgbb)। রেসপন্স থেকে সরল আউটপুট ফিরবে।
+    async function uploadImageBase64(base64str, filename) {
+      const url = "https://api.imgbb.com/1/upload?key=" + encodeURIComponent(IMGBB_API_KEY);
+      const form = new FormData();
+      form.append("image", base64str);
+      if (filename) form.append("name", filename.replace(/\.[^/.]+$/, ""));
+      // আপনি যদি JSON পছন্দ করেন, fetch থেকে response.json() ব্যবহার করুন।
+      const resp = await fetch(url, { method: "POST", body: form });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error("HTTP " + resp.status + ": " + txt);
+      }
+      const data = await resp.json();
+      return data;
+    }
+
+    // প্রধান ফাংশন: একাধিক ফাইল আপলোড
+    uploadBtn.addEventListener("click", async () => {
+      const files = Array.from(filesInput.files || []);
+      if (!files.length) {
+        alert("কোনো ছবি সিলেক্ট করা হয়নি।");
+        return;
+      }
+
+      // UI reset
+      resultsList.innerHTML = "";
+      overallProgress.style.display = "block";
+      overallBar.style.width = "0%";
+
+      // sequential upload: আপনি চাইলে Promise.all দিয়ে parallel করতে পারবেন।
+      const total = files.length;
+      let done = 0;
+
+      for (const file of files) {
+        const li = document.createElement("li");
+        li.className = "item";
+        li.innerHTML = `
+          <div>
+            <div style="font-weight:600">${file.name}</div>
+            <div class="meta" id="meta-${file.name.replace(/[^a-z0-9]/gi,'_')}">Waiting...</div>
+            <div class="progress" style="margin-top:8px"><div class="bar" id="bar-${file.name.replace(/[^a-z0-9]/gi,'_')}" style="width:0%"></div></div>
+          </div>
+          <div class="linkbox">
+            <button class="ghost cancel" disabled><i class="fa-solid fa-xmark"></i></button>
+          </div>
+        `;
+        resultsList.appendChild(li);
+
+        const meta = li.querySelector(".meta");
+        const bar = li.querySelector(".bar");
+        try {
+          meta.textContent = "Reading file...";
+          const b64 = await fileToBase64(file);
+
+          meta.textContent = "Uploading...";
+          // simple animation of bar (not real upload progress since fetch with formData doesn't provide progress easily)
+          bar.style.width = "15%";
+
+          const res = await uploadImageBase64(b64, file.name);
+          // imgbb successful response -> data.data.url
+          if (res && res.success) {
+            const link = res.data.url;
+            meta.innerHTML = `<span style="color:green">Uploaded</span> • <a href="${link}" target="_blank" rel="noopener noreferrer">${link}</a>`;
+            bar.style.width = "100%";
+
+            // show final link controls (copy/open)
+            const linkbox = li.querySelector(".linkbox");
+            linkbox.innerHTML = `
+              <button class="ghost open" data-url="${link}" title="Open"><i class="fa-solid fa-up-right-from-square"></i></button>
+              <button class="ghost copy" data-url="${link}" title="Copy"><i class="fa-regular fa-copy"></i></button>
+            `;
+            linkbox.querySelector(".open").addEventListener("click", ()=> window.open(link, "_blank"));
+            linkbox.querySelector(".copy").addEventListener("click", async (e)=>{
+              try {
+                await navigator.clipboard.writeText(link);
+                e.currentTarget.innerHTML = "Copied";
+                setTimeout(()=> e.currentTarget.innerHTML = '<i class="fa-regular fa-copy"></i>',900);
+              } catch(e){ alert("Copy failed: " + e); }
+            });
+
+            // save to history
+            saveToHistory({ link, name: file.name, at: new Date().toISOString() });
+
+          } else {
+            meta.innerHTML = `<span style="color:red">Upload failed</span> ${res && res.error ? (" - " + (res.error.message || JSON.stringify(res.error))) : ""}`;
+            bar.style.width = "0%";
+          }
+        } catch (err) {
+          meta.innerHTML = `<span style="color:red">Error: ${err.message}</span>`;
+          bar.style.width = "0%";
+        }
+
+        done++;
+        overallBar.style.width = Math.round((done / total) * 100) + "%";
+      } // end for
+
+      // শেষ হলে
+      setTimeout(()=> { overallProgress.style.display = "none"; overallBar.style.width = "0%"; }, 900);
+      // রিফ্রেশ ইতিহাস UI
+      loadHistory();
+    });
+
+    // clear history btn
+    clearHistoryBtn.addEventListener("click", ()=>{
+      if (confirm("আপনি কি নিশ্চিতভাবে হিস্ট্রি মুছতে চান?")) {
+        clearHistory();
+      }
+    });
+
+    // লোড হোনোর সময় ইতিহাস দেখান
+    loadHistory();
+  </script>
+</body>
+</html>
